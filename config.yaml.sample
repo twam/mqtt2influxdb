@@ -1,0 +1,31 @@
+influxdb:
+  address: localhost
+  port: 8086
+#  username: username
+#  password: topsecret
+  database: home
+
+mqtt:
+  address: localhost
+  port: 1883
+#  username: username
+#  password: topsecret
+  prefix: home
+
+rules:
+  - topic: +room/+sensor/+quantity
+    retain: False
+    payload:
+      type: float
+      name: "value"
+      field: True
+    tokens:
+      room:
+        rule: "^(livingroom|kitchen)$"
+        tag: True
+      sensor:
+        rule: "^(environment-sensor)$"
+        tag: True
+      quantity:
+        rule: "^(humidity|pressure|temperature)$"
+        measurement: True
