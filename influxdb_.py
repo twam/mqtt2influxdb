@@ -29,7 +29,7 @@ class Influxdb:
         self.database =  influxdbConfig.get("database", None)
 
     def connect(self):
-        logging.info("Connecting to InfluxDB server " + self.address + ":" + str(self.port) + " with username (" + self.username + ":" + self.password + ")")        
+        logging.info("Connecting to InfluxDB server " + self.address + ":" + str(self.port) + " with username '" + self.username + "'")
         self._client = influxdb.InfluxDBClient(self.address, self.port, self.username, self.password, self.database)
 
     def disconnect(self):
