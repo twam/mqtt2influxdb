@@ -102,7 +102,7 @@ class RuleHandler:
 
                                 handledCounter += 1
 
-                                logging.info('Send to db: %r' % (db_insert))
+                                logging.debug('Send to db: %r' % (db_insert))
                                 try:
                                     self._influxdb.write([db_insert])
                                 except Exception as e:
