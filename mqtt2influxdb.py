@@ -41,14 +41,14 @@ def parseArgs(argv):
 
     parser.add_argument("-v", "--verbose",
                         help="Increases log verbosity for each occurence", dest="verbose_count", action="count", default=0)
-                            
+
     args = parser.parse_args()
 
     return args
 
 def parseConfig(filename):
     try:
-        return yaml.load(open(filename, "r"))
+        return yaml.safe_load(open(filename, "r"))
     except Exception as e:
         raise
         logging.error("Can't load yaml file %r (%r)" % (filename, e))
