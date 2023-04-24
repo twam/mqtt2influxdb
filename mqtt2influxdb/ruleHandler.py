@@ -4,7 +4,8 @@ import threading
 import queue
 import re
 import json
-import topic
+
+from . import topic
 
 class RuleHandler:
     config = {}
@@ -63,11 +64,21 @@ class RuleHandler:
                                 if ('payload' in rule):
                                     name = rule['payload'].get('name', 'payload')
 
-                                    if rule['payload'].get('field', False) == True:
-                                        db_insert['fields'][name] = self._convertToType(msg.payload.decode("UTF-8"), rule['payload'].get('type', None))
+                                    if 'parser' in rule['payload']:
+                                        try:
+                                            locals_ = {'payload': json.loads(msg.payload.decode("UTF-8"))}
+                                        except json.decoder.JSONDecodeError:
+                                            locals_ = {'payload': msg.payload.decode("UTF-8")}
+                                        exec(rule['payload']['parser'], {}, locals_)
 
-                                    if ('tag' in rule['payload']) and (rule['payload']['tag'] == True):
-                                        db_insert['fields'][name] = self._convertToType(msg.payload.decode("UTF-8"), 'string')
+                                        if 'fields' in locals_:
+                                            db_insert['fields'] = locals_['fields']
+
+                                    if rule['payload'].get('field', False) == True:
+                                        db_insert['fields'][name] = self._convertToType(msg.payload.decode("UTF-8"), rule['payload'].get('type', None), rule['payload'].get('json', None))
+
+                                    # if ('tag' in rule['payload']) and (rule['payload']['tag'] == True):
+                                    #     db_insert['fields'][name] = self._convertToType(msg.payload.decode("UTF-8"), 'string')
 
                                 if ('fields' in rule) and (rule['fields'] != None):
                                     for fieldName, fieldValue in rule['fields'].items():
@@ -81,14 +92,23 @@ class RuleHandler:
                                     db_insert['measurement'] = self._convertToType(rule['measurement'], 'string')
 
                                 for tokenName, tokenValue in matches.items():
-                                    if tokenName in rule['tokens']:
+                                    #print(rule.get('tokens', None))
+                                    if tokenName in rule.get('tokens', []):
                                         tokenConfig = rule['tokens'][tokenName]
+                                        field_name = tokenConfig.get('field_name', tokenName)
+                                        tag_name = tokenConfig.get('tag_name', tokenName)
 
                                         if tokenConfig.get('field', False) == True:
-                                            db_insert['fields'].update({tokenName: str(tokenValue)})
+                                            db_insert['fields'].update({field_name: str(tokenValue)})
+
+                                        if tokenConfig.get('field_map', {}) != {}:
+                                            db_insert['fields'].update({field_name: str(tokenConfig['field_map'][tokenValue])})
 
                                         if tokenConfig.get('tag', False) == True:
-                                            db_insert['tags'].update({tokenName: str(tokenValue)})
+                                            db_insert['tags'].update({tag_name: str(tokenValue)})
+
+                                        if tokenConfig.get('tag_map', {}) != {}:
+                                            db_insert['tags'].update({tag_name: str(tokenConfig['tag_map'][tokenValue])})
 
                                         if tokenConfig.get('measurement', False) == True:
                                             db_insert['measurement'] = tokenValue
@@ -104,13 +124,16 @@ class RuleHandler:
 
                                 logging.debug('Send to db: %r' % (db_insert))
                                 try:
-                                    self._influxdb.write([db_insert])
+                                    if not rule.get('disable_write', False):
+                                        self._influxdb.write([db_insert])
+                                    else:
+                                        logging.info(f"Not writing: {db_insert}")
                                 except Exception as e:
-                                    logging.error('Could not insert into db:' + str(e))
+                                    logging.error(f'Could not insert into db: {e}')
 
                 self._mqtt.getQueue().task_done()
             except Exception as e:
-                logging.error('Error while sending from mqtt to db: ' + str(e))
+                logging.error(f'Error while sending from mqtt to db: {type(e).__name__}: {e}')
 
     def _parseConfiguration(self, config):
         self._topicObjects = []
@@ -147,7 +170,7 @@ class RuleHandler:
         for normalizedTopic in self._normalizedTopics:
             self._mqtt.subscribe(normalizedTopic)
 
-    def _convertToType(self, value, type_ = None):
+    def _convertToType(self, value, type_ = None, json_ = None):
         if type_ == None:
             if re.match("^\d+?\.?\d+?", value):
                 return self._convertToType(value, 'float')
@@ -163,5 +186,11 @@ class RuleHandler:
             return bool(value)
         elif type_ == 'string':
             return str(value)
+        elif type_ == 'json':
+            json_splitted = json_.split(',')
+            ret = json.loads(value)
+            for i in json_splitted:
+                ret = ret[i]
+            return str(ret)
         else:
             raise Exception("Invalid type '%s'" % type_)

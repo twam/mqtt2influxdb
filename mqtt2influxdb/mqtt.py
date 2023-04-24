@@ -2,6 +2,7 @@ import paho.mqtt.client as mqtt
 import logging
 import threading
 import queue
+import copy
 
 class Mqtt:
     username = ""
@@ -13,6 +14,7 @@ class Mqtt:
     _client = None
     _threads = []
     _queue = None
+    _topics = set()
 
     def __init__(self, config):
         if (config == None):
@@ -69,6 +71,7 @@ class Mqtt:
         fullTopic = self.prefix + topic
 
         logging.info("Subscribing to " + fullTopic + ".")
+        self._topics.add(fullTopic)
         self._client.subscribe(fullTopic)
 
     def publish(self, topic, value, retain):
@@ -83,12 +86,14 @@ class Mqtt:
 
     def _mqtt_on_connect(self, client, userdata, flags, rc):
         logging.info("Connected to MQTT server " + self.address + ":" + str(self.port) + ".")
+        for topic in copy.copy(self._topics):
+            self.subscribe(topic)
 
     def _mqtt_on_disconnect(self, client, userdata, rc):
         logging.info("Disconnected from MQTT server.")
 
     def _mqtt_on_message(self, client, userdata, msg):
-        logging.debug("Message: "+msg.topic +" "+msg.payload.decode('utf-8'))
+        logging.debug("Message: "+msg.topic +" "+msg.payload.decode('utf-8', errors="replace"))
 
         if msg.topic.startswith(self.prefix):
             msg.topic = msg.topic[len(self.prefix):].encode('utf-8')
