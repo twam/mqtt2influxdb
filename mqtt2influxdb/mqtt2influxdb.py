@@ -12,7 +12,7 @@ import paho.mqtt
 
 from . import influxdb_ as influxdb
 from . import mqtt
-from . import ruleHandler
+from .rule_handler import RuleHandler
 
 
 def main(argv=None):
@@ -67,7 +67,7 @@ def run(args):
     db = influxdb.Influxdb(config)
     db.connect()
 
-    rh = ruleHandler.RuleHandler(config, m, db)
+    rh = RuleHandler(config, m, db)
 
     stopEvent = threading.Event()
 
