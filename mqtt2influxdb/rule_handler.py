@@ -54,13 +54,14 @@ class RuleHandler:
 
                             matches = topicObject.parse(msg.topic)
 
-                            if (matches != None):
-                                db_inserts = [{
+                            if matches is not None:
+                                db_inserts = []
+
+                                # primary insert
+                                db_insert = {
                                     'fields': {},
                                     'tags': {}
-                                }]
-                                # primary insert
-                                db_insert = db_inserts[0]
+                                }
 
                                 if ('payload' in rule):
                                     name = rule['payload'].get('name', 'payload')
@@ -69,11 +70,22 @@ class RuleHandler:
                                         try:
                                             locals_ = {'payload': json.loads(msg.payload.decode("UTF-8"))}
                                         except json.decoder.JSONDecodeError:
-                                            locals_ = {'payload': msg.payload.decode("UTF-8")}
+                                            locals_ = {
+                                                'payload': msg.payload.decode("UTF-8")
+                                            }
+                                        locals_['tokens'] = {tokenName: tokenValue for tokenName, tokenValue in matches.items()}
+
                                         exec(rule['payload']['parser'], {}, locals_)
 
-                                        if 'fields' in locals_:
-                                            db_insert['fields'] = locals_['fields']
+                                        for key in ['fields', 'tags']:
+                                            if key in locals_:
+                                                db_insert[key] = locals_[key]
+
+                                        if 'inserts' in locals_:
+                                            if isinstance(locals_['inserts'], list):
+                                                db_inserts += locals_['inserts']
+                                            else:
+                                                raise TypeError("inserts must be of type list")
 
                                     if rule['payload'].get('field', False):
                                         db_insert['fields'][name] = self._convertToType(msg.payload.decode("UTF-8"), rule['payload'].get('type', None), rule['payload'].get('json', None))
@@ -115,13 +127,19 @@ class RuleHandler:
                                             db_insert['measurement'] = tokenValue
 
                                 # Check db_insert
-                                if 'measurement' not in db_insert:
-                                    logging.error(f'No measurement for rule {topicObject.topic}')
+                                if (len(db_insert['fields']) > 0) and (len(db_insert['tags']) > 0):
+                                    if 'measurement' not in db_insert:
+                                        logging.error(f'No measurement for rule {topicObject.topic}')
+
+                                    db_inserts.append(db_insert)
+
 
                                 if handledCounter > 0:
                                     logging.warning(f"Message for topic '{msg.topic}' handle {handledCounter} times")
 
                                 handledCounter += 1
+
+
 
                                 logging.debug(f'Send to db: {db_insert}')
                                 try:
