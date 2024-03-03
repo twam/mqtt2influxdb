@@ -1,7 +1,6 @@
 import paho.mqtt.client as mqttClient
 import logging
 import threading
-import queue
 import re
 import json
 
@@ -49,17 +48,19 @@ class RuleHandler:
                             # Handle message for all registered topics for this normalized topic
 
                             retain = rule['retain'] if ('retain' in rule) else False
-                            if (msg.retain == True) and (retain == False):
-                                logging.debug("Ignore retained message for topic '%s'" % msg.topic)
+                            if msg.retain and not retain:
+                                logging.debug(f"Ignore retained message for topic '{msg.topic}'")
                                 continue
 
                             matches = topicObject.parse(msg.topic)
 
                             if (matches != None):
-                                db_insert = {
+                                db_inserts = [{
                                     'fields': {},
                                     'tags': {}
-                                }
+                                }]
+                                # primary insert
+                                db_insert = db_inserts[0]
 
                                 if ('payload' in rule):
                                     name = rule['payload'].get('name', 'payload')
@@ -74,21 +75,21 @@ class RuleHandler:
                                         if 'fields' in locals_:
                                             db_insert['fields'] = locals_['fields']
 
-                                    if rule['payload'].get('field', False) == True:
+                                    if rule['payload'].get('field', False):
                                         db_insert['fields'][name] = self._convertToType(msg.payload.decode("UTF-8"), rule['payload'].get('type', None), rule['payload'].get('json', None))
 
                                     # if ('tag' in rule['payload']) and (rule['payload']['tag'] == True):
                                     #     db_insert['fields'][name] = self._convertToType(msg.payload.decode("UTF-8"), 'string')
 
-                                if ('fields' in rule) and (rule['fields'] != None):
+                                if ('fields' in rule) and (rule['fields'] is not None):
                                     for fieldName, fieldValue in rule['fields'].items():
                                         db_insert['tag'][fieldName] = fieldValue
 
-                                if ('tags' in rule) and (rule['tags'] != None):
+                                if ('tags' in rule) and (rule['tags'] is not None):
                                     for tagName, tagValue in rule['tags'].items():
                                         db_insert['tags'][tagName] = tagValue
 
-                                if rule.get('measurement', None) != None:
+                                if rule.get('measurement', None) is not None:
                                     db_insert['measurement'] = self._convertToType(rule['measurement'], 'string')
 
                                 for tokenName, tokenValue in matches.items():
@@ -98,36 +99,36 @@ class RuleHandler:
                                         field_name = tokenConfig.get('field_name', tokenName)
                                         tag_name = tokenConfig.get('tag_name', tokenName)
 
-                                        if tokenConfig.get('field', False) == True:
+                                        if tokenConfig.get('field', False):
                                             db_insert['fields'].update({field_name: str(tokenValue)})
 
                                         if tokenConfig.get('field_map', {}) != {}:
                                             db_insert['fields'].update({field_name: str(tokenConfig['field_map'][tokenValue])})
 
-                                        if tokenConfig.get('tag', False) == True:
+                                        if tokenConfig.get('tag', False):
                                             db_insert['tags'].update({tag_name: str(tokenValue)})
 
                                         if tokenConfig.get('tag_map', {}) != {}:
                                             db_insert['tags'].update({tag_name: str(tokenConfig['tag_map'][tokenValue])})
 
-                                        if tokenConfig.get('measurement', False) == True:
+                                        if tokenConfig.get('measurement', False):
                                             db_insert['measurement'] = tokenValue
 
                                 # Check db_insert
                                 if 'measurement' not in db_insert:
-                                    logging.error('No measurement for rule %s' % topicObject.topic)
+                                    logging.error(f'No measurement for rule {topicObject.topic}')
 
                                 if handledCounter > 0:
-                                    logging.warning("Message for topic '%s' handle %u times" % (msg.topic, handledCounter))
+                                    logging.warning(f"Message for topic '{msg.topic}' handle {handledCounter} times")
 
                                 handledCounter += 1
 
-                                logging.debug('Send to db: %r' % (db_insert))
+                                logging.debug(f'Send to db: {db_insert}')
                                 try:
                                     if not rule.get('disable_write', False):
-                                        self._influxdb.write([db_insert])
+                                        self._influxdb.write(db_inserts)
                                     else:
-                                        logging.info(f"Not writing: {db_insert}")
+                                        logging.info(f"Not writing: {db_inserts}")
                                 except Exception as e:
                                     logging.error(f'Could not insert into db: {e}')
 
@@ -142,8 +143,8 @@ class RuleHandler:
         # Load Rules
         self._rules = config.get("rules", None)
 
-        if (self._rules == None):
-            raise "No configuration section for Rules"
+        if self._rules is None:
+            raise ValueError("No configuration section for Rules")
 
         for index, rule in enumerate(self._rules):
             if 'topic' not in rule:
@@ -161,7 +162,7 @@ class RuleHandler:
             self._normalizedTopics[topicObject.normalized].append(rule)
 
             # Add tokens to topic
-            if ('tokens' in rule) and (type(rule['tokens']) == dict):
+            if ('tokens' in rule) and isinstance(rule['tokens'], dict):
                 for tokenName, tokenData in rule['tokens'].items():
                     if 'rule' in tokenData:
                         topicObject.addTokenRule(tokenName, tokenData['rule'])
@@ -171,10 +172,10 @@ class RuleHandler:
             self._mqtt.subscribe(normalizedTopic)
 
     def _convertToType(self, value, type_ = None, json_ = None):
-        if type_ == None:
-            if re.match("^\d+?\.?\d+?", value):
+        if type_ is None:
+            if re.match(r"^\d+?\.?\d+?", value):
                 return self._convertToType(value, 'float')
-            elif re.match("^(true|True|TRUE|false|False|FALSE)$", value):
+            elif re.match(r"^(true|True|TRUE|false|False|FALSE)$", value):
                 return self._convertToType(value, 'bool')
             else:
                 return self._convertType(value, 'string')
