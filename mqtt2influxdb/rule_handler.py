@@ -77,7 +77,7 @@ class RuleHandler:
 
                                         exec(rule['payload']['parser'], {}, locals_)
 
-                                        for key in ['fields', 'tags']:
+                                        for key in ['fields', 'tags', 'measurement']:
                                             if key in locals_:
                                                 db_insert[key] = locals_[key]
 
@@ -106,6 +106,7 @@ class RuleHandler:
 
                                 for tokenName, tokenValue in matches.items():
                                     #print(rule.get('tokens', None))
+
                                     if tokenName in rule.get('tokens', []):
                                         tokenConfig = rule['tokens'][tokenName]
                                         field_name = tokenConfig.get('field_name', tokenName)
@@ -126,20 +127,21 @@ class RuleHandler:
                                         if tokenConfig.get('measurement', False):
                                             db_insert['measurement'] = tokenValue
 
+                                        if tokenConfig.get('measurement_map', {}) != {}:
+                                            db_insert['measurement'] = str(tokenConfig['measurement_map'][tokenValue])
+
+
                                 # Check db_insert
                                 if (len(db_insert['fields']) > 0) and (len(db_insert['tags']) > 0):
                                     if 'measurement' not in db_insert:
-                                        logging.error(f'No measurement for rule {topicObject.topic}')
+                                        logging.error(f'No measurement for rule {topicObject.topic}: {db_insert}')
 
                                     db_inserts.append(db_insert)
 
-
                                 if handledCounter > 0:
-                                    logging.warning(f"Message for topic '{msg.topic}' handle {handledCounter} times")
+                                    logging.warning(f"Message for topic '{msg.topic}' already handled {handledCounter} times")
 
                                 handledCounter += 1
-
-
 
                                 logging.debug(f'Send to db: {db_insert}')
                                 try:
