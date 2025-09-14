@@ -1,31 +1,37 @@
-[tool.black]
-line-length = 140
-target-version = ['py311']
-include = '\.pyi?$'
-
-[tool.poetry]
+[project]
 name = "mqtt2influxdb"
 version = "0.0.1"
 description = ""
 authors = [
-	"Tobias Müller <Tobias_Mueller@twam.info>"
+	{ name = "Tobias Müller", email = "Tobias_Mueller@twam.info" }
 ]
 license = "MIT"
+requires-python = ">=3.12"
+dependencies = [
+	"python-daemon>=3.0.1,<4",
+	"PyYAML>=6.0,<7",
+	"paho-mqtt>=1.6,<2", # asyncio-mqtt isn't working with 2, yet
+	"influxdb>=5.3.1,<6"
+]
 
-[tool.poetry.scripts]
+[project.scripts]
 mqtt2influxdb = 'mqtt2influxdb.mqtt2influxdb:main'
 
-[tool.poetry.dependencies]
-python="^3.11"
-python-daemon="^3.0.1"
-PyYAML="^6.0"
-paho-mqtt="^1.6"
-influxdb="^5.3.1"
-
-[tool.poetry.dev-dependencies]
-ruff = "*"
-pytest = "*"
+[dependency-groups]
+dev= [
+	"ruff",
+	"pytest",
+]
 
 [build-system]
-requires = ["poetry-core>=1.0.0"]
-build-backend = "poetry.core.masonry.api"
+requires = ["uv_build>=0.8.17,<0.9.0"]
+build-backend = "uv_build"
+
+[tool.ruff]
+line-length = 140
+
+[tool.ruff.lint]
+# "ANN", 
+select = ["F", "E", "W", "I", "N", "UP", "YTT", "ASYNC", "BLE", "FBT", "B", "COM", "C4", "DTZ", "EM", "EXE", "FA", "ISC", "ICN", "LOG", "G", "INP", "PIE", "PT", "Q", "RSE", "RET", "SLF", "SLOT", "SIM", "TID", "INT", "ARG", "PTH", "FIX", "ERA", "NPY", "RUF"]
+ignore = ["EXE002", "G004"]
+
