@@ -134,7 +134,7 @@ class Topic:
             }
 
     def _processTokenRaw(self, token):
-        escapedToken = re.escape(token)
+        escapedToken = token # re.escape(token)
 
         return {
             'type': 'raw',
