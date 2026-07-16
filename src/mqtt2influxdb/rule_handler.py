@@ -3,6 +3,7 @@ import logging
 import threading
 import re
 import json
+from functools import lru_cache
 
 from . import topic
 
@@ -27,6 +28,15 @@ class RuleHandler:
     def finish(self):
         logging.info("Finishing topic handler ...")
         self._stopEvent.set()
+        self._mqtt.getQueue().put(None)
+
+    @lru_cache(maxsize=128)
+    def _getMatchingRules(self, topic):
+        matches = []
+        for normalizedTopic, rules in self._normalizedTopics.items():
+            if mqttClient.topic_matches_sub(normalizedTopic, topic):
+                matches.append((normalizedTopic, rules))
+        return matches
 
     def _queueHandler(self):
         logging.info("Starting Queue handler ...")
@@ -40,7 +50,7 @@ class RuleHandler:
                 logging.debug("MQTT message: topic="+msg.topic+" payload="+msg.payload.decode('utf-8')+" qos="+str(msg.qos)+" retain="+str(msg.retain))
                 handledCounter = 0
 
-                for normalizedTopic, rules in self._normalizedTopics.items():
+                for normalizedTopic, rules in self._getMatchingRules(msg.topic):
                     if mqttClient.topic_matches_sub(normalizedTopic, msg.topic):
                         # Message matches normalized topic
                         for rule in rules:
@@ -66,7 +76,7 @@ class RuleHandler:
                                 if ('payload' in rule):
                                     name = rule['payload'].get('name', 'payload')
 
-                                    if 'parser' in rule['payload']:
+                                    if 'compiled_parser' in rule['payload']:
                                         try:
                                             locals_ = {'payload': json.loads(msg.payload.decode("UTF-8"))}
                                         except json.decoder.JSONDecodeError:
@@ -75,7 +85,7 @@ class RuleHandler:
                                             }
                                         locals_['tokens'] = {tokenName: tokenValue for tokenName, tokenValue in matches.items()}
 
-                                        exec(rule['payload']['parser'], {}, locals_)
+                                        exec(rule['payload']['compiled_parser'], {}, locals_)
 
                                         for key in ['fields', 'tags', 'measurement']:
                                             if key in locals_:
@@ -186,6 +196,10 @@ class RuleHandler:
                 for tokenName, tokenData in rule['tokens'].items():
                     if 'rule' in tokenData:
                         topicObject.addTokenRule(tokenName, tokenData['rule'])
+
+            # Pre-compile parser
+            if 'payload' in rule and 'parser' in rule['payload']:
+                rule['payload']['compiled_parser'] = compile(rule['payload']['parser'], '<string>', 'exec')
 
     def _subcribeMqttTopics(self):
         for normalizedTopic in self._normalizedTopics:
