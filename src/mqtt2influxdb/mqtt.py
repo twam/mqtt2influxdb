@@ -42,7 +42,10 @@ class Mqtt:
         # Optional warning threshold for the internal backlog.  Set to 0 to
         # disable the warning.
         self.queue_warning_size = mqttConfig.get("queue_warning_size", 1000)
+        self.queue_warning_interval = mqttConfig.get("queue_warning_interval", 10)
         self._queue_warned = False
+        self._last_queue_warning_time = 0
+        self._stopEvent = threading.Event()
 
     def connect(self):
         logging.info("Connecting to MQTT server " + self.address + ":" + str(self.port) + " ...")
@@ -62,8 +65,14 @@ class Mqtt:
         mqttLoopThread.start()
         self._threads.append(mqttLoopThread)
 
+        queueMonitorThread = threading.Thread(target=self._queueMonitor, name="queueMonitor")
+        queueMonitorThread.daemon = True
+        queueMonitorThread.start()
+        self._threads.append(queueMonitorThread)
+
     def disconnect(self):
         logging.info("Disconnecting from MQTT server ...")
+        self._stopEvent.set()
         self._client.disconnect()
         self._queue.put(None)
 
@@ -98,23 +107,34 @@ class Mqtt:
     def _mqtt_on_disconnect(self, client, userdata, rc):
         logging.info("Disconnected from MQTT server.")
 
-    def _check_queue_size(self):
+    def _check_queue_size(self, force=False):
         if self.queue_warning_size <= 0:
             return
 
         size = self._queue.qsize()
         if size > self.queue_warning_size:
-            if not self._queue_warned:
+            now = time.time()
+            deadline = self._last_queue_warning_time + self.queue_warning_interval
+            if not self._queue_warned or (force and now >= deadline):
                 logging.warning(
                     f"MQTT queue backlog is large ({size} messages, "
                     f"threshold {self.queue_warning_size}). InfluxDB writes "
                     f"are falling behind real-time data."
                 )
                 self._queue_warned = True
+                self._last_queue_warning_time = now
         elif size <= self.queue_warning_size // 2:
             if self._queue_warned:
                 logging.info(f"MQTT queue backlog recovered ({size} messages).")
                 self._queue_warned = False
+                self._last_queue_warning_time = 0
+
+    def _queueMonitor(self):
+        logging.debug("Starting queue monitor ...")
+        while not self._stopEvent.is_set():
+            self._stopEvent.wait(self.queue_warning_interval)
+            if not self._stopEvent.is_set():
+                self._check_queue_size(force=True)
 
     def _mqtt_on_message(self, client, userdata, msg):
         logging.debug("Message: "+msg.topic +" "+msg.payload.decode('utf-8', errors="replace"))
