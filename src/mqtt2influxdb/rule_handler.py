@@ -42,10 +42,12 @@ class RuleHandler:
         logging.info("Starting Queue handler ...")
         while not self._stopEvent.is_set():
             try:
-                msg = self._mqtt.getQueue().get()
-                if msg is None:
+                item = self._mqtt.getQueue().get()
+                if item is None:
                     self._mqtt.getQueue().task_done()
                     continue
+
+                msg, received_at = item
 
                 logging.debug("MQTT message: topic="+msg.topic+" payload="+msg.payload.decode('utf-8')+" qos="+str(msg.qos)+" retain="+str(msg.retain))
                 handledCounter = 0
@@ -147,6 +149,10 @@ class RuleHandler:
                                         logging.error(f'No measurement for rule {topicObject.topic}: {db_insert}')
 
                                     db_inserts.append(db_insert)
+
+                                for insert in db_inserts:
+                                    if 'time' not in insert:
+                                        insert['time'] = received_at
 
                                 if handledCounter > 0:
                                     logging.warning(f"Message for topic '{msg.topic}' already handled {handledCounter} times")

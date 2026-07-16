@@ -3,6 +3,7 @@ import logging
 import threading
 import queue
 import copy
+import time
 
 class Mqtt:
     username = ""
@@ -95,12 +96,17 @@ class Mqtt:
     def _mqtt_on_message(self, client, userdata, msg):
         logging.debug("Message: "+msg.topic +" "+msg.payload.decode('utf-8', errors="replace"))
 
+        # Capture wall-clock time as early as possible so we can stamp the
+        # InfluxDB point with the moment the MQTT message arrived, not the
+        # moment it is eventually written.
+        received_at = time.time_ns()
+
         if msg.topic.startswith(self.prefix):
             msg.topic = msg.topic[len(self.prefix):].encode('utf-8')
         else:
             raise "Received message does not contain prefix."
 
-        self._queue.put(msg)
+        self._queue.put((msg, received_at))
 
     def _mqtt_on_log(self, client, userdata, level, buf):
         if (level == mqtt.MQTT_LOG_ERR):
