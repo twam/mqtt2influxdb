@@ -39,6 +39,11 @@ class Mqtt:
         if (self.prefix != "") and (self.prefix[-1] != '/'):
             self.prefix = self.prefix+'/'
 
+        # Optional warning threshold for the internal backlog.  Set to 0 to
+        # disable the warning.
+        self.queue_warning_size = mqttConfig.get("queue_warning_size", 1000)
+        self._queue_warned = False
+
     def connect(self):
         logging.info("Connecting to MQTT server " + self.address + ":" + str(self.port) + " ...")
 
@@ -93,6 +98,24 @@ class Mqtt:
     def _mqtt_on_disconnect(self, client, userdata, rc):
         logging.info("Disconnected from MQTT server.")
 
+    def _check_queue_size(self):
+        if self.queue_warning_size <= 0:
+            return
+
+        size = self._queue.qsize()
+        if size > self.queue_warning_size:
+            if not self._queue_warned:
+                logging.warning(
+                    f"MQTT queue backlog is large ({size} messages, "
+                    f"threshold {self.queue_warning_size}). InfluxDB writes "
+                    f"are falling behind real-time data."
+                )
+                self._queue_warned = True
+        elif size <= self.queue_warning_size // 2:
+            if self._queue_warned:
+                logging.info(f"MQTT queue backlog recovered ({size} messages).")
+                self._queue_warned = False
+
     def _mqtt_on_message(self, client, userdata, msg):
         logging.debug("Message: "+msg.topic +" "+msg.payload.decode('utf-8', errors="replace"))
 
@@ -107,6 +130,7 @@ class Mqtt:
             raise "Received message does not contain prefix."
 
         self._queue.put((msg, received_at))
+        self._check_queue_size()
 
     def _mqtt_on_log(self, client, userdata, level, buf):
         if (level == mqtt.MQTT_LOG_ERR):
