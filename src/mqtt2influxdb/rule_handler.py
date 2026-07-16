@@ -32,11 +32,11 @@ class RuleHandler:
 
     @lru_cache(maxsize=128)
     def _getMatchingRules(self, topic):
-        matches = []
-        for normalizedTopic, rules in self._normalizedTopics.items():
-            if mqttClient.topic_matches_sub(normalizedTopic, topic):
-                matches.append((normalizedTopic, rules))
-        return matches
+        matching_rules = []
+        for normalized_topic, rules in self._normalizedTopics.items():
+            if mqttClient.topic_matches_sub(normalized_topic, topic):
+                matching_rules.extend(rules)
+        return matching_rules
 
     def _queueHandler(self):
         logging.info("Starting Queue handler ...")
@@ -49,19 +49,20 @@ class RuleHandler:
 
                 msg, received_at = item
 
-                logging.debug("MQTT message: topic="+msg.topic+" payload="+msg.payload.decode('utf-8')+" qos="+str(msg.qos)+" retain="+str(msg.retain))
+                # Decode once; the payload is used by logging, the parser and
+                # the simple field conversion below.
+                payload_str = msg.payload.decode('utf-8', errors='replace')
+
+                logging.debug("MQTT message: topic=%s payload=%s qos=%s retain=%s", msg.topic, payload_str, msg.qos, msg.retain)
                 handledCounter = 0
 
-                for normalizedTopic, rules in self._getMatchingRules(msg.topic):
-                    if mqttClient.topic_matches_sub(normalizedTopic, msg.topic):
-                        # Message matches normalized topic
-                        for rule in rules:
+                for rule in self._getMatchingRules(msg.topic):
                             topicObject = rule['topicObject']
                             # Handle message for all registered topics for this normalized topic
 
                             retain = rule['retain'] if ('retain' in rule) else False
                             if msg.retain and not retain:
-                                logging.debug(f"Ignore retained message for topic '{msg.topic}'")
+                                logging.debug("Ignore retained message for topic '%s'", msg.topic)
                                 continue
 
                             matches = topicObject.parse(msg.topic)
@@ -80,11 +81,9 @@ class RuleHandler:
 
                                     if 'compiled_parser' in rule['payload']:
                                         try:
-                                            locals_ = {'payload': json.loads(msg.payload.decode("UTF-8"))}
+                                            locals_ = {'payload': json.loads(payload_str)}
                                         except json.decoder.JSONDecodeError:
-                                            locals_ = {
-                                                'payload': msg.payload.decode("UTF-8")
-                                            }
+                                            locals_ = {'payload': payload_str}
                                         locals_['tokens'] = {tokenName: tokenValue for tokenName, tokenValue in matches.items()}
 
                                         exec(rule['payload']['compiled_parser'], {}, locals_)
@@ -100,7 +99,7 @@ class RuleHandler:
                                                 raise TypeError("inserts must be of type list")
 
                                     if rule['payload'].get('field', False):
-                                        db_insert['fields'][name] = self._convertToType(msg.payload.decode("UTF-8"), rule['payload'].get('type', None), rule['payload'].get('json', None))
+                                        db_insert['fields'][name] = self._convertToType(payload_str, rule['payload'].get('type', None), rule['payload'].get('json', None))
 
                                     # if ('tag' in rule['payload']) and (rule['payload']['tag'] == True):
                                     #     db_insert['fields'][name] = self._convertToType(msg.payload.decode("UTF-8"), 'string')
@@ -155,16 +154,16 @@ class RuleHandler:
                                         insert['time'] = received_at
 
                                 if handledCounter > 0:
-                                    logging.warning(f"Message for topic '{msg.topic}' already handled {handledCounter} times")
+                                    logging.warning("Message for topic '%s' already handled %s times", msg.topic, handledCounter)
 
                                 handledCounter += 1
 
-                                logging.debug(f'Send to db: {db_insert}')
+                                logging.debug('Send to db: %s', db_insert)
                                 try:
                                     if not rule.get('disable_write', False):
                                         self._influxdb.write(db_inserts)
                                     else:
-                                        logging.info(f"Not writing: {db_inserts}")
+                                        logging.info("Not writing: %s", db_inserts)
                                 except Exception as e:
                                     logging.error(f'Could not insert into db: {e}')
 

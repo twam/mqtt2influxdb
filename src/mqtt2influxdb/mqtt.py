@@ -137,7 +137,7 @@ class Mqtt:
                 self._check_queue_size(force=True)
 
     def _mqtt_on_message(self, client, userdata, msg):
-        logging.debug("Message: "+msg.topic +" "+msg.payload.decode('utf-8', errors="replace"))
+        logging.debug("Message: %s %s", msg.topic, msg.payload)
 
         # Capture wall-clock time as early as possible so we can stamp the
         # InfluxDB point with the moment the MQTT message arrived, not the
