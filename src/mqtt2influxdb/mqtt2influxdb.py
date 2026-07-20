@@ -1,14 +1,13 @@
 #!/usr/bin/python
 
-import logging
-import sys
-import daemon
-import time
 import argparse
+import asyncio
+import logging
+import signal
+import sys
+
+import daemon
 import yaml
-import threading
-import re
-import paho.mqtt
 
 from . import influxdb_ as influxdb
 from . import mqtt
@@ -21,13 +20,13 @@ def main(argv=None):
 
     args = parseArgs(argv)
 
-    if (args.daemon):
+    if args.daemon:
         context = daemon.DaemonContext()
-
         with context:
-            run(args)
+            asyncio.run(run_async(args))
     else:
-        run(args)
+        asyncio.run(run_async(args))
+
 
 def parseArgs(argv):
     parser = argparse.ArgumentParser(
@@ -36,7 +35,7 @@ def parseArgs(argv):
         )
 
     parser.add_argument("-c", "--conf_file",
-                        help="Specify config file", metavar="FILE", required = True)
+                        help="Specify config file", metavar="FILE", required=True)
 
     parser.add_argument("-d", "--daemon",
                         help="Run as daemon", action='store_true')
@@ -48,49 +47,73 @@ def parseArgs(argv):
 
     return args
 
+
 def parseConfig(filename):
     try:
         return yaml.safe_load(open(filename, "r"))
     except Exception as e:
+        logging.error("Can't load yaml file %r (%r)", filename, e)
         raise
-        logging.error("Can't load yaml file %r (%r)" % (filename, e))
 
-def run(args):
+
+async def run_async(args):
     logging.basicConfig(format="%(asctime)s [%(threadName)-15s] %(levelname)-6s %(message)s",
                         level=max(3 - args.verbose_count, 0) * 10)
 
     config = parseConfig(args.conf_file)
 
     m = mqtt.Mqtt(config)
-    m.connect()
-
     db = influxdb.Influxdb(config)
-    db.connect()
-
     rh = RuleHandler(config, m, db)
 
-    stopEvent = threading.Event()
+    db.connect()
+
+    loop = asyncio.get_running_loop()
+    stop_event = asyncio.Event()
+
+    def _signal_handler():
+        logging.info("Received shutdown signal.")
+        stop_event.set()
+
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        loop.add_signal_handler(sig, _signal_handler)
+
+    mqtt_task = asyncio.create_task(m.run(rh))
+    rh_task = asyncio.create_task(rh.run())
+    stop_task = asyncio.create_task(stop_event.wait())
+    tasks = [mqtt_task, rh_task, stop_task]
 
     try:
-        while True:
-            stopEvent.wait(60)
-
-    except (SystemExit,KeyboardInterrupt):
-        # Normal exit getting a signal from the parent process
-        pass
-    except:
-        # Something unexpected happened?
-        logging.exception("Exception")
+        await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
     finally:
-        logging.info("Shutting down...")
+        # Cancel the signal watcher and the MQTT task first so no new
+        # messages are received.
+        if not stop_task.done():
+            stop_task.cancel()
+        if not mqtt_task.done():
+            mqtt_task.cancel()
+        await asyncio.gather(stop_task, mqtt_task, return_exceptions=True)
 
-        stopEvent.set()
-
+        # Let the rule handler drain the backlog and finish.
         rh.finish()
-        m.disconnect()
-        db.disconnect()
+        await m.getQueue().put(None)
+        if not rh_task.done():
+            rh_task.cancel()
+        await asyncio.gather(rh_task, return_exceptions=True)
 
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            loop.remove_signal_handler(sig)
+
+        await m.disconnect()
+        db.disconnect()
+        logging.info("Shutdown complete.")
         logging.shutdown()
+
+    for task in tasks:
+        exc = task.exception()
+        if exc is not None and not isinstance(exc, asyncio.CancelledError):
+            raise exc
+
 
 if __name__ == "__main__":
     main()

@@ -10,7 +10,7 @@ requires-python = ">=3.12"
 dependencies = [
 	"python-daemon>=3.0.1,<4",
 	"PyYAML>=6.0,<7",
-	"paho-mqtt>=1.6,<2", # asyncio-mqtt isn't working with 2, yet
+	"aiomqtt>=2.3,<3",
 	"influxdb>=5.3.1,<6"
 ]
 

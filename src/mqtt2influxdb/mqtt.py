@@ -1,9 +1,18 @@
-import paho.mqtt.client as mqtt
+import asyncio
 import logging
-import threading
-import queue
-import copy
 import time
+from dataclasses import dataclass
+
+import aiomqtt
+
+
+@dataclass
+class MqttMessage:
+    topic: str
+    payload: bytes
+    qos: int
+    retain: bool
+
 
 class Mqtt:
     username = ""
@@ -13,99 +22,110 @@ class Mqtt:
     prefix = ""
 
     _client = None
-    _threads = []
     _queue = None
-    _topics = set()
+    _topics = None
 
     def __init__(self, config):
-        if (config == None):
-            raise "No configuration given."
+        if config is None:
+            raise ValueError("No configuration given.")
 
-        # Load MQTT settings
         mqttConfig = config.get("mqtt", None)
 
-        if (mqttConfig == None):
-                raise "No configuration section for MQTT"
+        if mqttConfig is None:
+            raise ValueError("No configuration section for MQTT")
 
         self.username = mqttConfig.get("username", "")
         self.password = mqttConfig.get("password", "")
         self.address = mqttConfig.get("address", "localhost")
         self.port = mqttConfig.get("port", 1883)
-        self._queue = queue.Queue()
-        self.prefix = mqttConfig.get("prefix")
+        self.prefix = mqttConfig.get("prefix", "")
 
-        if (self.prefix == None):
-            self.prefix = ""
-        if (self.prefix != "") and (self.prefix[-1] != '/'):
-            self.prefix = self.prefix+'/'
+        if self.prefix and not self.prefix.endswith("/"):
+            self.prefix += "/"
 
         # Optional warning threshold for the internal backlog.  Set to 0 to
         # disable the warning.
         self.queue_warning_size = mqttConfig.get("queue_warning_size", 1000)
         self.queue_warning_interval = mqttConfig.get("queue_warning_interval", 10)
+
+        self._queue = asyncio.Queue()
+        self._topics = set()
         self._queue_warned = False
         self._last_queue_warning_time = 0
-        self._stopEvent = threading.Event()
 
-    def connect(self):
-        logging.info("Connecting to MQTT server " + self.address + ":" + str(self.port) + " ...")
+    async def run(self, rule_handler):
+        """Connect to the broker, subscribe, and forward messages until cancelled."""
+        logging.info("Connecting to MQTT server %s:%s ...", self.address, self.port)
+        async with aiomqtt.Client(
+            hostname=self.address,
+            port=self.port,
+            username=self.username or None,
+            password=self.password or None,
+            keepalive=60,
+        ) as self._client:
+            logging.info("Connected to MQTT server %s:%s.", self.address, self.port)
 
-        self._client = mqtt.Client()
+            await rule_handler.subscribe_topics()
 
-        if (self.username != "" and self.password != ""):
-            self._client.username_pw_set(self.username, self.password)
+            warning_task = asyncio.create_task(self._queue_warning_loop())
+            try:
+                await self._consume_messages()
+            finally:
+                warning_task.cancel()
+                try:
+                    await warning_task
+                except asyncio.CancelledError:
+                    pass
 
-        self._client.on_message = self._mqtt_on_message
-        self._client.on_connect = self._mqtt_on_connect
-        self._client.on_disconnect = self._mqtt_on_disconnect
-        self._client.on_log = self._mqtt_on_log
-        self._client.connect(self.address, self.port, 60)
+    async def _consume_messages(self):
+        async for message in self._client.messages:
+            await self._handle_message(message)
 
-        mqttLoopThread = threading.Thread(target=self._mqttLoop, name="mqttLoop")
-        mqttLoopThread.start()
-        self._threads.append(mqttLoopThread)
+    async def _handle_message(self, message):
+        received_at = time.time_ns()
+        topic_name = str(message.topic)
+        logging.debug("Message: %s %s", topic_name, message.payload)
 
-        queueMonitorThread = threading.Thread(target=self._queueMonitor, name="queueMonitor")
-        queueMonitorThread.daemon = True
-        queueMonitorThread.start()
-        self._threads.append(queueMonitorThread)
+        # Capture wall-clock time as early as possible so we can stamp the
+        # InfluxDB point with the moment the MQTT message arrived, not the
+        # moment it is eventually written.
+        if topic_name.startswith(self.prefix):
+            topic_name = topic_name[len(self.prefix):]
+        else:
+            logging.error("Received message does not contain prefix.")
+            return
 
-    def disconnect(self):
-        logging.info("Disconnecting from MQTT server ...")
-        self._stopEvent.set()
-        self._client.disconnect()
-        self._queue.put(None)
+        await self._queue.put(
+            (
+                MqttMessage(
+                    topic=topic_name,
+                    payload=message.payload,
+                    qos=message.qos,
+                    retain=message.retain,
+                ),
+                received_at,
+            )
+        )
+        self._check_queue_size()
 
-        for t in self._threads:
-            t.join()
+    async def _queue_warning_loop(self):
+        while True:
+            await asyncio.sleep(self.queue_warning_interval)
+            self._check_queue_size(force=True)
+
+    async def subscribe(self, topic):
+        full_topic = self.prefix + topic
+        logging.info("Subscribing to %s.", full_topic)
+        self._topics.add(topic)
+        await self._client.subscribe(full_topic)
+
+    async def publish(self, topic, value, retain):
+        full_topic = self.prefix + topic
+        logging.debug("Publishing to '%s': %r", full_topic, value)
+        await self._client.publish(topic=full_topic, payload=value, qos=0, retain=retain)
 
     def getQueue(self):
         return self._queue
-
-    def subscribe(self, topic):
-        fullTopic = self.prefix + topic
-
-        logging.info("Subscribing to " + fullTopic + ".")
-        self._topics.add(fullTopic)
-        self._client.subscribe(fullTopic)
-
-    def publish(self, topic, value, retain):
-        fullTopic = self.prefix + topic
-
-        logging.debug("Publishing to '%s': %r" % (fullTopic, value))
-        self._client.publish(topic=fullTopic, payload=value, qos=0, retain=retain)
-
-    def _mqttLoop(self):
-        logging.debug("Starting MQTT loop ...")
-        self._client.loop_forever()
-
-    def _mqtt_on_connect(self, client, userdata, flags, rc):
-        logging.info("Connected to MQTT server " + self.address + ":" + str(self.port) + ".")
-        for topic in copy.copy(self._topics):
-            self.subscribe(topic)
-
-    def _mqtt_on_disconnect(self, client, userdata, rc):
-        logging.info("Disconnected from MQTT server.")
 
     def _check_queue_size(self, force=False):
         if self.queue_warning_size <= 0:
@@ -129,35 +149,7 @@ class Mqtt:
                 self._queue_warned = False
                 self._last_queue_warning_time = 0
 
-    def _queueMonitor(self):
-        logging.debug("Starting queue monitor ...")
-        while not self._stopEvent.is_set():
-            self._stopEvent.wait(self.queue_warning_interval)
-            if not self._stopEvent.is_set():
-                self._check_queue_size(force=True)
-
-    def _mqtt_on_message(self, client, userdata, msg):
-        logging.debug("Message: %s %s", msg.topic, msg.payload)
-
-        # Capture wall-clock time as early as possible so we can stamp the
-        # InfluxDB point with the moment the MQTT message arrived, not the
-        # moment it is eventually written.
-        received_at = time.time_ns()
-
-        if msg.topic.startswith(self.prefix):
-            msg.topic = msg.topic[len(self.prefix):].encode('utf-8')
-        else:
-            raise "Received message does not contain prefix."
-
-        self._queue.put((msg, received_at))
-        self._check_queue_size()
-
-    def _mqtt_on_log(self, client, userdata, level, buf):
-        if (level == mqtt.MQTT_LOG_ERR):
-            logging.error("MQTT: " + buf)
-        elif (level == mqtt.MQTT_LOG_WARNING):
-            logging.warning("MQTT: " + buf)
-        elif ((level == mqtt.MQTT_LOG_INFO) or (level == mqtt.MQTT_LOG_NOTICE)):
-            logging.info("MQTT: " + buf)
-        else:
-            logging.debug("MQTT: " + buf)
+    async def disconnect(self):
+        """Hook for explicit cleanup; the async context manager disconnects the client."""
+        logging.info("Disconnecting from MQTT server ...")
+        self._client = None
