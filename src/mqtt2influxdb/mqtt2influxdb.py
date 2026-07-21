@@ -6,7 +6,6 @@ import logging
 import signal
 import sys
 
-import daemon
 import yaml
 
 from . import influxdb_ as influxdb
@@ -20,12 +19,7 @@ def main(argv=None):
 
     args = parseArgs(argv)
 
-    if args.daemon:
-        context = daemon.DaemonContext()
-        with context:
-            asyncio.run(run_async(args))
-    else:
-        asyncio.run(run_async(args))
+    asyncio.run(run_async(args))
 
 
 def parseArgs(argv):
@@ -36,9 +30,6 @@ def parseArgs(argv):
 
     parser.add_argument("-c", "--conf_file",
                         help="Specify config file", metavar="FILE", required=True)
-
-    parser.add_argument("-d", "--daemon",
-                        help="Run as daemon", action='store_true')
 
     parser.add_argument("-v", "--verbose",
                         help="Increases log verbosity for each occurence", dest="verbose_count", action="count", default=0)
