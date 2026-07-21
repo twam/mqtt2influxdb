@@ -30,12 +30,8 @@ class RuleHandler:
 
     @lru_cache(maxsize=128)
     def _getMatchingRules(self, topic):
-        matching_rules = []
         topic_obj = Topic(topic)
-        for normalized_topic, rules in self._normalizedTopics.items():
-            if topic_obj.matches(Wildcard(normalized_topic)):
-                matching_rules.extend(rules)
-        return matching_rules
+        return [rule for rule in self._rules if topic_obj.matches(rule["wildcard"])]
 
     async def run(self):
         while not self._stop_event.is_set():
@@ -166,7 +162,7 @@ class RuleHandler:
                         logging.debug('Send to db: %s', db_insert)
                         try:
                             if not rule.get('disable_write', False):
-                                await asyncio.to_thread(self._influxdb.write, db_inserts)
+                                self._influxdb.write(db_inserts)
                             else:
                                 logging.info("Not writing: %s", db_inserts)
                         except Exception as e:
@@ -190,6 +186,7 @@ class RuleHandler:
             # Create topic object
             topicObject = topic.Topic(rule['topic'])
             rule['topicObject'] = topicObject
+            rule['wildcard'] = Wildcard(topicObject.normalized)
 
             # Add topic to list of normalized Topics
             if topicObject.normalized not in self._normalizedTopics:
