@@ -111,7 +111,7 @@ class RuleHandler:
 
                         if ('fields' in rule) and (rule['fields'] is not None):
                             for fieldName, fieldValue in rule['fields'].items():
-                                db_insert['tag'][fieldName] = fieldValue
+                                db_insert['fields'][fieldName] = fieldValue
 
                         if ('tags' in rule) and (rule['tags'] is not None):
                             for tagName, tagValue in rule['tags'].items():

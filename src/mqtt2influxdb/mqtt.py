@@ -38,7 +38,7 @@ class Mqtt:
         self.password = mqttConfig.get("password", "")
         self.address = mqttConfig.get("address", "localhost")
         self.port = mqttConfig.get("port", 1883)
-        self.prefix = mqttConfig.get("prefix", "")
+        self.prefix = mqttConfig.get("prefix", "") or ""
 
         if self.prefix and not self.prefix.endswith("/"):
             self.prefix += "/"
